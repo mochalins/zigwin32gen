@@ -3,12 +3,11 @@ const std = @import("std");
 const Build = std.Build;
 const Step = std.Build.Step;
 const CrossTarget = std.zig.CrossTarget;
-const buildcommon = @import("0.13.0/common.zig");
 
 comptime {
-    const required_zig = "0.14.0";
+    const required_zig = "0.15.0-dev.1391+a5f891d0b";
     const v = std.SemanticVersion.parse(required_zig) catch unreachable;
-    if (builtin.zig_version.order(v) != .eq) @compileError(
+    if (builtin.zig_version.order(v) == .lt) @compileError(
         "zig version " ++ required_zig ++ " is required to ensure zigwin32 output is always the same",
     );
 }
@@ -50,9 +49,11 @@ pub fn build(b: *Build) !void {
     const pass1_out_file = blk: {
         const pass1_exe = b.addExecutable(.{
             .name = "pass1",
-            .root_source_file = b.path("src/pass1.zig"),
-            .optimize = optimize,
-            .target = b.graph.host,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/pass1.zig"),
+                .optimize = optimize,
+                .target = b.graph.host,
+            }),
         });
 
         const run = b.addRunArtifact(pass1_exe);
@@ -66,8 +67,10 @@ pub fn build(b: *Build) !void {
     const zigexports = blk: {
         const exe = b.addExecutable(.{
             .name = "genzigexports",
-            .root_source_file = b.path("src/genzigexports.zig"),
-            .target = b.graph.host,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/genzigexports.zig"),
+                .target = b.graph.host,
+            }),
         });
         exe.root_module.addImport("win32_stub", b.createModule(.{
             .root_source_file = b.path("src/static/win32.zig"),
@@ -80,9 +83,11 @@ pub fn build(b: *Build) !void {
     const gen_out_dir = blk: {
         const exe = b.addExecutable(.{
             .name = "genzig",
-            .root_source_file = b.path("src/genzig.zig"),
-            .optimize = optimize,
-            .target = b.graph.host,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/genzig.zig"),
+                .optimize = optimize,
+                .target = b.graph.host,
+            }),
         });
         exe.root_module.addImport(
             "zigexports",
@@ -112,9 +117,11 @@ pub fn build(b: *Build) !void {
     {
         const diff_exe = b.addExecutable(.{
             .name = "diff",
-            .root_source_file = b.path("src/diff.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/diff.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+            }),
         });
         const diff = b.addRunArtifact(diff_exe);
         // fetches from zigwin32 github and also modifies the contents
@@ -133,9 +140,11 @@ pub fn build(b: *Build) !void {
 
     {
         const unittest = b.addTest(.{
-            .root_source_file = gen_out_dir.path(b, "win32.zig"),
-            .target = b.graph.host,
-            .optimize = optimize,
+            .root_module = b.createModule(.{
+                .root_source_file = gen_out_dir.path(b, "win32.zig"),
+                .target = b.graph.host,
+                .optimize = optimize,
+            }),
         });
         unittest.pie = true;
         unittest_step.dependOn(&unittest.step);
@@ -145,13 +154,15 @@ pub fn build(b: *Build) !void {
         .root_source_file = gen_out_dir.path(b, "win32.zig"),
     });
 
-    buildcommon.addExamples(b, optimize, win32, b.path("examples"));
+    addExamples(b, optimize, win32, b.path("examples"));
 
     {
         const exe = b.addExecutable(.{
             .name = "comoverload",
-            .root_source_file = b.path("test/comoverload.zig"),
-            .target = b.graph.host,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/comoverload.zig"),
+                .target = b.graph.host,
+            }),
         });
         exe.root_module.addImport("win32", win32);
         const run = b.addRunArtifact(exe);
@@ -197,7 +208,8 @@ const PrintLazyPath = struct {
     fn make(step: *Step, opt: std.Build.Step.MakeOptions) !void {
         _ = opt;
         const print: *PrintLazyPath = @fieldParentPtr("step", step);
-        try std.io.getStdOut().writer().print(
+        var stdout = std.fs.File.stdout().writer(&.{});
+        try stdout.interface.print(
             "{s}\n",
             .{print.lazy_path.getPath(step.owner)},
         );
@@ -212,5 +224,79 @@ fn addDefaultStepDeps(b: *std.Build, default_steps: []const u8) void {
             .{step_name},
         );
         b.default_step.dependOn(&step.step);
+    }
+}
+
+fn addExamples(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+    win32: *std.Build.Module,
+    examples: std.Build.LazyPath,
+) void {
+    const arches: []const ?[]const u8 = &[_]?[]const u8{
+        null,
+        "x86",
+        "x86_64",
+        "aarch64",
+    };
+    const examples_step = b.step("examples", "Build/run examples. Use -j1 to run one at a time");
+
+    try addExample(b, arches, optimize, win32, examples, "helloworld", .Console, examples_step);
+    try addExample(b, arches, optimize, win32, examples, "wasapi", .Console, examples_step);
+    try addExample(b, arches, optimize, win32, examples, "net", .Console, examples_step);
+    try addExample(b, arches, optimize, win32, examples, "tests", .Console, examples_step);
+
+    try addExample(b, arches, optimize, win32, examples, "helloworld-window", .Windows, examples_step);
+    try addExample(b, arches, optimize, win32, examples, "d2dcircle", .Windows, examples_step);
+    try addExample(b, arches, optimize, win32, examples, "opendialog", .Windows, examples_step);
+    try addExample(b, arches, optimize, win32, examples, "unionpointers", .Windows, examples_step);
+    try addExample(b, arches, optimize, win32, examples, "testwindow", .Windows, examples_step);
+}
+
+fn addExample(
+    b: *std.Build,
+    arches: []const ?[]const u8,
+    optimize: std.builtin.OptimizeMode,
+    win32: *std.Build.Module,
+    examples: std.Build.LazyPath,
+    root: []const u8,
+    subsystem: std.Target.SubSystem,
+    examples_step: *std.Build.Step,
+) !void {
+    const basename = b.fmt("{s}.zig", .{root});
+    for (arches) |cross_arch_opt| {
+        const name = if (cross_arch_opt) |arch| b.fmt("{s}-{s}", .{ root, arch }) else root;
+
+        const arch_os_abi = if (cross_arch_opt) |arch| b.fmt("{s}-windows", .{arch}) else "native";
+        const target_query = std.Target.Query.parse(.{ .arch_os_abi = arch_os_abi }) catch unreachable;
+        const target = b.resolveTargetQuery(target_query);
+        const exe = b.addExecutable(.{
+            .name = name,
+            .root_module = b.createModule(.{
+                .root_source_file = examples.path(b, basename),
+                .target = target,
+                .optimize = optimize,
+                .single_threaded = true,
+            }),
+            .win32_manifest = if (subsystem == .Windows) examples.path(b, "win32.manifest") else null,
+        });
+        exe.subsystem = subsystem;
+        exe.root_module.addImport("win32", win32);
+        examples_step.dependOn(&exe.step);
+        exe.pie = true;
+
+        const desc_suffix: []const u8 = if (cross_arch_opt) |_| "" else " for the native target";
+        const build_desc = b.fmt("Build {s}{s}", .{ name, desc_suffix });
+        b.step(b.fmt("{s}-build", .{name}), build_desc).dependOn(&exe.step);
+
+        const run_cmd = b.addRunArtifact(exe);
+        const run_desc = b.fmt("Run {s}{s}", .{ name, desc_suffix });
+        b.step(name, run_desc).dependOn(&run_cmd.step);
+
+        if (builtin.os.tag == .windows) {
+            if (cross_arch_opt == null) {
+                examples_step.dependOn(&run_cmd.step);
+            }
+        }
     }
 }

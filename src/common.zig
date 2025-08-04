@@ -38,14 +38,7 @@ pub fn asciiLessThanIgnoreCase(_: void, lhs: []const u8, rhs: []const u8) bool {
 fn SliceFormatter(comptime T: type, comptime spec: []const u8) type {
     return struct {
         slice: []const T,
-        pub fn format(
-            self: @This(),
-            comptime fmt: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            _ = fmt;
-            _ = options;
+        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
             var first: bool = true;
             for (self.slice) |e| {
                 if (first) {
@@ -86,20 +79,14 @@ pub fn jsonEnforceMsg(cond: bool, comptime msg: []const u8, args: anytype) void 
 
 const JsonFormatter = struct {
     value: std.json.Value,
-    pub fn format(
-        self: JsonFormatter,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+
+    pub fn format(self: JsonFormatter, writer: *std.Io.Writer) !void {
         switch (self.value) {
             // avoid issues where std.json adds quotes to big numbers
             // (potential fix: https://github.com/ziglang/zig/pull/16707)
-            .integer => |i| try std.fmt.formatIntValue(i, "", .{}, writer),
+            .integer => |i| try writer.printInt(i, 10, .lower, .{}),
             .number_string => |s| try writer.writeAll(s),
-            else => try std.json.stringify(self.value, .{}, writer),
+            else => try std.json.Stringify.value(self.value, .{}, writer),
         }
     }
 };
@@ -119,14 +106,8 @@ pub fn fmtJson(value: anytype) JsonFormatter {
 pub const ComInterface = struct {
     name: []const u8,
     api: []const u8,
-    pub fn format(
-        self: ComInterface,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
+
+    pub fn format(self: ComInterface, writer: *std.Io.Writer) !void {
         try writer.print(
             "{{\"Kind\":\"ApiRef\",\"Name\":\"{s}\",\"TargetKind\":\"Com\",\"Api\":\"{s}\",\"Parents\":[]}}",
             .{ self.name, self.api },

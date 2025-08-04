@@ -7,9 +7,6 @@ const fatal = common.fatal;
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 const allocator = arena.allocator();
 
-const BufferedWriter = std.io.BufferedWriter(4096, std.fs.File.Writer);
-const OutWriter = BufferedWriter.Writer;
-
 pub fn main() !u8 {
     const all_args = try std.process.argsAlloc(allocator);
     // don't care about freeing args
@@ -40,31 +37,29 @@ pub fn main() !u8 {
 
     const out_file = try std.fs.cwd().createFile(out_filename, .{});
     defer out_file.close();
-    var buffered_writer = BufferedWriter{
-        .unbuffered_writer = out_file.writer(),
-    };
-    const out = buffered_writer.writer();
+    var out_buffer: [4096]u8 = undefined;
+    var out = out_file.writer(&out_buffer);
 
-    try out.writeAll("{\n");
+    try out.interface.writeAll("{\n");
     var json_obj_prefix: []const u8 = "";
 
     for (api_list.items) |api_json_basename| {
         const name = api_json_basename[0 .. api_json_basename.len - 5];
-        try out.print("    {s}\"{s}\": {{\n", .{ json_obj_prefix, name });
+        try out.interface.print("    {s}\"{s}\": {{\n", .{ json_obj_prefix, name });
         var file = try api_dir.openFile(api_json_basename, .{});
         defer file.close();
-        try pass1OnFile(out, api_path, api_json_basename, file);
-        try out.writeAll("    }\n");
+        try pass1OnFile(&out.interface, api_path, api_json_basename, file);
+        try out.interface.writeAll("    }\n");
         json_obj_prefix = ",";
     }
 
-    try out.writeAll("}\n");
-    try buffered_writer.flush();
+    try out.interface.writeAll("}\n");
+    try out.interface.flush();
     std.log.info("wrote {s}", .{out_filename});
     return 0;
 }
 
-fn pass1OnFile(out: OutWriter, api_dir: []const u8, filename: []const u8, file: std.fs.File) !void {
+fn pass1OnFile(out: *std.Io.Writer, api_dir: []const u8, filename: []const u8, file: std.fs.File) !void {
     var json_arena_instance = std.heap.ArenaAllocator.init(allocator);
     defer json_arena_instance.deinit();
     const json_arena = json_arena_instance.allocator();
@@ -81,11 +76,11 @@ fn pass1OnFile(out: OutWriter, api_dir: []const u8, filename: []const u8, file: 
     try pass1OnJson(out, api);
 }
 
-fn writeType(out: OutWriter, json_obj_prefix: []const u8, name: []const u8, kind: []const u8) !void {
+fn writeType(out: *std.Io.Writer, json_obj_prefix: []const u8, name: []const u8, kind: []const u8) !void {
     try out.print("        {s}\"{s}\": {{\"Kind\":\"{s}\"}}\n", .{ json_obj_prefix, name, kind });
 }
 
-fn pass1OnJson(out: OutWriter, api: metadata.Api) !void {
+fn pass1OnJson(out: *std.Io.Writer, api: metadata.Api) !void {
     var json_obj_prefix: []const u8 = "";
 
     for (api.Types) |t| {
@@ -103,7 +98,7 @@ fn pass1OnJson(out: OutWriter, api: metadata.Api) !void {
 }
 
 fn generateNativeTypedef(
-    out: OutWriter,
+    out: *std.Io.Writer,
     json_obj_prefix: []const u8,
     t: metadata.Type,
     native_typedef: metadata.NativeTypedef,
@@ -181,7 +176,7 @@ fn isIntegral(native: metadata.TypeRefNative) bool {
 }
 
 fn writeComType(
-    out: OutWriter,
+    out: *std.Io.Writer,
     json_obj_prefix: []const u8,
     t: metadata.Type,
     com: metadata.Com,
@@ -196,7 +191,7 @@ fn writeComType(
     };
 
     try out.print(
-        "        {s}\"{s}\": {{\"Kind\":\"Com\",\"Interface\":{?}}}\n",
+        "        {s}\"{s}\": {{\"Kind\":\"Com\",\"Interface\":{?f}}}\n",
         .{ json_obj_prefix, t.Name, iface },
     );
 }
